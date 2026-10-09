@@ -1,0 +1,35 @@
+{
+    "channels": [
+        "pekkaaaplays",
+        "anshyt",
+        "mafianinja",
+        "killeryttt"
+    ],
+    "wait_times": {
+        "livestream_active": {
+            "min": 120,
+            "max": 300
+        },
+        "livestream_inactive": 600,
+        "error_wait": 180
+    },
+    "authorization": "Bearer YOUR_KICK_BEARER_TOKEN_HERE",
+    "messages": [
+        "[emote:1730752:emojiAngel]",
+        "[emote:1730756:emojiCheerful]",
+        "[emote:1730787:emojiHappy]",
+        "[emote:1730834:emojiYay]"
+    ],
+    "web_dashboard": {
+        "enabled": true,
+        "port": 4000
+    },
+    "prediction": {
+        "enabled": true,
+        "amount": 50
+    },
+    "telegram": {
+        "bot_token": "YOUR_TELEGRAM_BOT_TOKEN_HERE",
+        "allowed_user_ids": []
+    }
+}
