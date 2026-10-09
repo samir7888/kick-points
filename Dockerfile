@@ -5,7 +5,8 @@ WORKDIR /app
 # Set environment defaults
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    TZ=UTC
+    TZ=UTC \
+    PORT=4000
 
 # Install system dependencies (ca-certificates for SSL, tzdata, curl)
 RUN apt-get update && apt-get install -y --no-install-recommends \

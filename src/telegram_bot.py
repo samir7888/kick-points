@@ -413,44 +413,89 @@ async def cmd_wake(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     global _keepalive_active, _keepalive_thread
 
     if _keepalive_active:
-        await update.message.reply_text("🏃 Keep-alive is already running!")
+        await update.message.reply_text(
+            "🏃 <b>Keep-alive is already running!</b>\n"
+            f"Currently pinging every {int(os.environ.get('KEEPALIVE_INTERVAL', '840')) // 60} minutes.",
+            parse_mode=ParseMode.HTML
+        )
         return
 
+    # Try multiple environment variables for service URL, with your Render URL as primary
     service_url = (
         os.environ.get("RENDER_EXTERNAL_URL")
-        or os.environ.get("SERVICE_URL")
-        or "http://localhost:4000"
+        or os.environ.get("SERVICE_URL") 
+        or os.environ.get("RAILWAY_STATIC_URL")  # Railway support
+        or os.environ.get("VERCEL_URL")          # Vercel support
+        or "https://kick-points.onrender.com"    # Your Render URL as default
+        or "http://localhost:4000"               # Local fallback
     ).rstrip("/")
+
+    # If it's a relative URL from Vercel, add https://
+    if service_url.startswith("//"):
+        service_url = "https:" + service_url
+    elif service_url and not service_url.startswith(("http://", "https://")):
+        service_url = "https://" + service_url
 
     interval = int(os.environ.get("KEEPALIVE_INTERVAL", "840"))
 
-    _keepalive_active = True
-    _keepalive_thread = threading.Thread(
-        target=_keepalive_worker,
-        args=(service_url, interval),
-        daemon=True,
-        name="tg-keepalive",
-    )
-    _keepalive_thread.start()
+    try:
+        # Test the URL first
+        test_response = None
+        try:
+            import httpx
+            with httpx.Client(timeout=10) as client:
+                test_response = client.get(f"{service_url}/health")
+            logger.info(f"[KeepAlive] Test ping successful: {service_url}/health -> {test_response.status_code}")
+        except Exception as e:
+            logger.warning(f"[KeepAlive] Test ping failed: {e}")
+            # Continue anyway, might work during actual pings
 
-    await update.message.reply_text(
-        f"🏃 <b>Keep-alive started!</b>\n"
-        f"Pinging <code>{_esc(service_url)}/health</code> every {interval // 60} minutes to prevent Render sleep.",
-        parse_mode=ParseMode.HTML,
-    )
+        _keepalive_active = True
+        _keepalive_thread = threading.Thread(
+            target=_keepalive_worker,
+            args=(service_url, interval),
+            daemon=True,
+            name="tg-keepalive",
+        )
+        _keepalive_thread.start()
+
+        status_text = "✅ Test ping successful" if test_response and test_response.status_code == 200 else "⚠️ Test ping failed, but will keep trying"
+
+        await update.message.reply_text(
+            f"🏃 <b>Keep-alive started!</b>\n\n"
+            f"🌐 <b>URL:</b> <code>{service_url}/health</code>\n"
+            f"⏰ <b>Interval:</b> Every {interval // 60} minutes ({interval}s)\n"
+            f"🔍 <b>Status:</b> {status_text}\n\n"
+            f"This will keep your Render service awake by pinging it regularly.\n"
+            f"Use /sleep to stop the keep-alive pings.",
+            parse_mode=ParseMode.HTML,
+        )
+        
+    except Exception as e:
+        logger.error(f"[KeepAlive] Failed to start: {e}")
+        await update.message.reply_text(
+            f"❌ <b>Failed to start keep-alive:</b>\n<code>{str(e)}</code>",
+            parse_mode=ParseMode.HTML,
+        )
 
 
 async def cmd_sleep(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     global _keepalive_active
 
     if not _keepalive_active:
-        await update.message.reply_text("💤 Keep-alive is already stopped.")
+        await update.message.reply_text(
+            "💤 <b>Keep-alive is already stopped.</b>\n"
+            "Your service will sleep after Render's inactivity timeout (usually ~15 minutes).",
+            parse_mode=ParseMode.HTML
+        )
         return
 
     _keepalive_active = False
     await update.message.reply_text(
-        "💤 <b>Keep-alive stopped.</b>\n"
-        "The service will sleep after Render's inactivity timeout.",
+        "💤 <b>Keep-alive stopped successfully!</b>\n\n"
+        "🔻 The service will now sleep after Render's inactivity timeout.\n"
+        "🔄 Use /wake to restart keep-alive pings anytime.\n\n"
+        "⏰ <b>Note:</b> Render free tier sleeps after ~15 minutes of no requests.",
         parse_mode=ParseMode.HTML,
     )
 
