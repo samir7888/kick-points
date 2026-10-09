@@ -19,7 +19,16 @@ class Config:
 
     @classmethod
     def load(cls, path: str = "config.json") -> "Config":
-        """Load configuration from JSON file."""
+        """Load configuration from JSON file or CONFIG_JSON environment variable."""
+        import os
+        if os.environ.get("CONFIG_JSON"):
+            data = json.loads(os.environ["CONFIG_JSON"])
+            return cls(**data)
+
+        if not os.path.exists(path) and os.path.exists("config.example.json"):
+            # If config.json doesn't exist, check if environment variables are set
+            pass
+
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         return cls(**data)
