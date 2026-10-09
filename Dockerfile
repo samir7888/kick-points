@@ -25,6 +25,7 @@ RUN mkdir -p logs
 # Copy source code and entrypoint
 COPY src/ ./src/
 COPY main.py .
+COPY config.example.json .
 
 # Expose web dashboard port
 EXPOSE 4000

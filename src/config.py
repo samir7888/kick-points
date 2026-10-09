@@ -21,14 +21,26 @@ class Config:
     def load(cls, path: str = "config.json") -> "Config":
         """Load configuration from JSON file or CONFIG_JSON environment variable."""
         import os
+        
+        # First check for CONFIG_JSON environment variable
         if os.environ.get("CONFIG_JSON"):
             data = json.loads(os.environ["CONFIG_JSON"])
             return cls(**data)
 
-        if not os.path.exists(path) and os.path.exists("config.example.json"):
-            # If config.json doesn't exist, check if environment variables are set
-            pass
-
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return cls(**data)
+        # Check if config file exists
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return cls(**data)
+        
+        # If config.json doesn't exist, try config.example.json as fallback
+        if os.path.exists("config.example.json"):
+            print("Warning: config.json not found, using config.example.json")
+            with open("config.example.json", "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return cls(**data)
+        
+        # If no config file exists, raise a helpful error
+        raise FileNotFoundError(
+            f"Configuration file not found. Please create '{path}' or set CONFIG_JSON environment variable."
+        )

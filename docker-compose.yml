@@ -4,12 +4,16 @@ services:
     container_name: kick-points-miner
     restart: unless-stopped
     volumes:
-      - ./config.json:/app/config.json:ro
+      # Optional: Mount config.json if you prefer file-based config
+      # - ./config.json:/app/config.json:ro
       - ./logs:/app/logs
     environment:
       - TZ=UTC
       - PORT=4000
-      # Telegram bot token (can also be set in config.json)
+      # Option 1: Use CONFIG_JSON environment variable with your complete config
+      - CONFIG_JSON=${CONFIG_JSON:-}
+      # Option 2: Individual environment variables (if you modify config.py to support them)
+      - KICK_AUTHORIZATION=${KICK_AUTHORIZATION:-}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       # Render external URL for keep-alive pings (/wake command)
       - RENDER_EXTERNAL_URL=${RENDER_EXTERNAL_URL:-}
