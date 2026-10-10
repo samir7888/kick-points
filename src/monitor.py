@@ -312,11 +312,43 @@ class ChannelMonitor:
             )
             web_server.update_channel_prediction_availability(self.username, True)
 
-            # ✨ RANDOMIZED OUTCOME SELECTION ✨
-            # Instead of always picking the first option, randomly choose one
-            selected_outcome = random.choice(outcomes)
+            # ✨ SMART PREDICTION SELECTION ✨
+            # Analyze outcomes and make more intelligent choices
+            
+            # Strategy 1: Favor outcomes with better odds (higher multipliers)
+            outcomes_with_odds = []
+            for outcome in outcomes:
+                # Look for return_rate or odds data
+                return_rate = outcome.get("return_rate", 1.0)
+                odds = outcome.get("odds", 1.0)
+                multiplier = max(return_rate, odds)
+                outcomes_with_odds.append({
+                    "outcome": outcome,
+                    "multiplier": multiplier,
+                    "title": outcome.get("title", ""),
+                })
+            
+            # Strategy 2: Weight selection based on potential returns
+            # Higher odds = higher potential return but lower probability
+            # We'll use a balanced approach: 70% random, 30% weighted by odds
+            if random.random() < 0.3 and outcomes_with_odds:
+                # 30% chance: Pick based on favorable odds
+                # Sort by multiplier descending, but still add some randomness
+                sorted_outcomes = sorted(outcomes_with_odds, key=lambda x: x["multiplier"], reverse=True)
+                # Pick from top 50% of outcomes by odds
+                top_half = sorted_outcomes[:max(1, len(sorted_outcomes) // 2)]
+                selected_data = random.choice(top_half)
+                selected_outcome = selected_data["outcome"]
+                strategy = f"Smart (odds: {selected_data['multiplier']:.2f}x)"
+            else:
+                # 70% chance: Pure random selection
+                selected_outcome = random.choice(outcomes)
+                strategy = "Random"
+            
             outcome_id = str(selected_outcome.get("id") or "")
             outcome_title = selected_outcome.get("title", "Unknown Outcome")
+            
+            logger.info(f"{self.username}: Selection strategy: {strategy} → '{outcome_title}'")
 
             if not outcome_id:
                 logger.warning(
