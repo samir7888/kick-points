@@ -312,8 +312,11 @@ class ChannelMonitor:
             )
             web_server.update_channel_prediction_availability(self.username, True)
 
-            outcome_id = str(outcomes[0].get("id") or "")
-            outcome_title = outcomes[0].get("title", "Unknown Outcome")
+            # ✨ RANDOMIZED OUTCOME SELECTION ✨
+            # Instead of always picking the first option, randomly choose one
+            selected_outcome = random.choice(outcomes)
+            outcome_id = str(selected_outcome.get("id") or "")
+            outcome_title = selected_outcome.get("title", "Unknown Outcome")
 
             if not outcome_id:
                 logger.warning(
