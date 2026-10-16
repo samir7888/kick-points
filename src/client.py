@@ -111,10 +111,121 @@ class KickClient:
                         "prediction": pred,
                         "user_vote": user_vote,
                     }
+                # If no active pred but we got response, return empty context? 
+                return {
+                    "prediction": pred,
+                    "user_vote": user_vote,
+                }
         except Exception as e:
             logger.error(f"Error fetching latest prediction data for {username}: {e}")
 
         return None
+
+    def get_channel_points(self, username: Optional[str] = None) -> Optional[dict]:
+        """Get channel/user points/balance information.
+        """
+        try:
+            # Get prediction data which often contains user context
+            if username:
+                pred_data = self.get_latest_prediction_data(username)
+                if pred_data:
+                    # Return combined info
+                    return {
+                        "prediction_context": pred_data,
+                        "username": username,
+                        "note": "Points balance not directly exposed via public API; showing context info"
+                    }
+            # Also return user info
+            try:
+                headers = self._headers()
+                headers.update({"Accept": "application/json", "Referer": "https://kick.com"})
+                response = self.scraper.get("https://kick.com/api/v1/user", headers=headers, timeout=10)
+                if response.status_code == 200:
+                    return response.json()
+            except Exception:
+                pass
+        except Exception as e:
+            logger.error(f"Error fetching channel points: {e}")
+        return None
+
+    def set_channel_points(self, username: str, amount: int) -> bool:
+        """Set/update channel points for the authenticated user on a channel.
+        
+        WARNING: This is a speculative implementation. Kick does not expose a public
+        REST endpoint to arbitrarily set points - points are earned through watching,
+        chat activity, etc. This method tries common patterns in case such an endpoint
+        exists or is used by the internal API.
+        
+        Args:
+            username: Channel username
+            amount: Target points amount to set
+        """
+        try:
+            headers = self._headers()
+            headers.update({
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "Referer": f"https://kick.com/{username}",
+                "Origin": "https://kick.com",
+            })
+
+            # Try various possible endpoints/patterns
+            endpoints = [
+                f"{self.BASE_URL}/channels/{username}/points",
+                f"{self.BASE_URL}/channels/{username}/viewer/points",
+                f"{self.BASE_URL}/users/points",
+                f"https://kick.com/api/v1/channels/{username}/points",
+            ]
+
+            for url in endpoints:
+                try:
+                    payloads = [
+                        {"amount": amount, "points": amount},
+                        {"channel_points": amount},
+                        {"balance": amount},
+                    ]
+                    for payload in payloads:
+                        response = self.scraper.post(url, json=payload, headers=headers, timeout=10)
+                        if response.status_code in (200, 201, 204):
+                            logger.success(f"Successfully set points for {username} to {amount}")
+                            return True
+                        # If method not allowed, try PUT
+                        if response.status_code == 405:
+                            response = self.scraper.put(url, json=payload, headers=headers, timeout=10)
+                            if response.status_code in (200, 201, 204):
+                                logger.success(f"Successfully set points for {username} to {amount}")
+                                return True
+                except Exception:
+                    continue
+
+            logger.warning(f"Could not set points for {username} - endpoint not found or not accessible")
+            return False
+        except Exception as e:
+            logger.error(f"Error setting channel points for {username}: {e}")
+            return False
+
+    def update_channel_points(self, username: str, amount_delta: int) -> bool:
+        """Update channel points by delta amount (add/subtract)."""
+        try:
+            # First get current points
+            current = self.get_channel_points(username)
+            current_amount = 0
+            if current:
+                # Try to extract current amount
+                for key in ["channel_points", "points", "balance"]:
+                    if key in current:
+                        current_amount = int(current[key])
+                        break
+                    # Check nested
+                    viewer = current.get("viewer") or current.get("user") or {}
+                    if isinstance(viewer, dict) and key in viewer:
+                        current_amount = int(viewer[key])
+                        break
+            new_amount = current_amount + amount_delta
+            return self.set_channel_points(username, new_amount)
+        except Exception as e:
+            logger.error(f"Error updating channel points for {username}: {e}")
+            return False
 
     def vote_prediction(self, username: str, prediction_id: str,
                         outcome_id: str, amount: int = 50) -> bool:

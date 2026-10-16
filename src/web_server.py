@@ -9,7 +9,7 @@ never break the mining loop.
 import threading
 from datetime import datetime
 
-from flask import Flask, render_template_string, jsonify
+from flask import Flask, render_template_string, jsonify, request
 from loguru import logger
 from .prediction_logger import prediction_logger
 
@@ -588,29 +588,92 @@ def get_channel_predictions(username: str):
         }), 500
 
 
+@app.route("/api/points/<username>", methods=["GET"])
+def get_points(username: str):
+    """Get channel points for a user/channel."""
+    try:
+        from .config import Config
+        from .client import KickClient
+        config = Config.load()
+        client = KickClient(config.authorization)
+        points_data = client.get_channel_points(username)
+        return jsonify({
+            "username": username,
+            "points_data": points_data,
+            "success": points_data is not None
+        })
+    except Exception as e:
+        logger.error(f"Error getting points for {username}: {e}")
+        return jsonify({"error": str(e), "success": False}), 500
+
+
+@app.route("/api/points/<username>/set", methods=["POST"])
+def set_points(username: str):
+    """Set channel points for a user/channel."""
+    try:
+        data = request.get_json(silent=True) or {}
+        amount = int(data.get("amount") or data.get("points") or request.args.get("amount") or 0)
+        from .config import Config
+        from .client import KickClient
+        config = Config.load()
+        client = KickClient(config.authorization)
+        success = client.set_channel_points(username, amount)
+        return jsonify({
+            "username": username,
+            "amount": amount,
+            "success": success
+        })
+    except Exception as e:
+        logger.error(f"Error setting points for {username}: {e}")
+        return jsonify({"error": str(e), "success": False}), 500
+
+
+@app.route("/api/points/<username>/update", methods=["POST"])
+def update_points(username: str):
+    """Update channel points by delta."""
+    try:
+        data = request.get_json(silent=True) or {}
+        delta = int(data.get("delta") or data.get("amount") or request.args.get("delta") or 0)
+        from .config import Config
+        from .client import KickClient
+        config = Config.load()
+        client = KickClient(config.authorization)
+        success = client.update_channel_points(username, delta)
+        return jsonify({
+            "username": username,
+            "delta": delta,
+            "success": success
+        })
+    except Exception as e:
+        logger.error(f"Error updating points for {username}: {e}")
+        return jsonify({"error": str(e), "success": False}), 500
+
+
 @app.route("/api/debug/<username>")
 def debug_channel_data(username: str):
     """Debug endpoint to inspect raw channel data."""
     try:
-        # We need to access the client from somewhere - let's create a temporary one
-        # This is a bit hacky but for debugging purposes it's fine
         from .config import Config
         from .client import KickClient
-        
         config = Config.load()
         client = KickClient(config.authorization)
-        
-        channel_data = client.debug_channel_data(username)
-        if channel_data:
-            return jsonify({
-                "username": username,
-                "channel_data": channel_data,
-                "success": True
-            })
+        channel_data = client.get_channel(username)
+        points_data = client.get_channel_points(username)
+        prediction_data = client.get_latest_prediction_data(username)
+        result = {
+            "username": username,
+            "channel_data": channel_data,
+            "points_data": points_data,
+            "prediction_data": prediction_data,
+            "success": True
+        }
+        if channel_data or points_data:
+            return jsonify(result)
         else:
             return jsonify({
                 "username": username,
                 "error": "No channel data found",
+                "data": result,
                 "success": False
             }), 404
             

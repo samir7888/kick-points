@@ -112,6 +112,10 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "• /predictions — 7-day prediction stats & recent bets\n"
         "• /pred &lt;name&gt; — Prediction history for a specific channel\n"
         "• /ping — Quick health check ping\n\n"
+        "💰 <b>Points Management</b>\n"
+        "• /points &lt;name&gt; — Get channel points context (shows prediction/user info)\n"
+        "• /setpoints &lt;name&gt; &lt;amount&gt; — Set channel points (may not work if API restricted)\n"
+        "• /updatepoints &lt;name&gt; &lt;+/-delta&gt; — Update channel points (may not work if API restricted)\n\n"
         "⚙️ <b>Render / Hosting Controls</b>\n"
         "• /wake — Start keep-alive pings (prevents Render instance from sleeping)\n"
         "• /sleep — Stop keep-alive pings\n\n"
@@ -408,6 +412,114 @@ async def cmd_pred_channel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text(f"Error: {e}")
 
 
+async def cmd_points(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Get channel points for a specific channel."""
+    if not ctx.args:
+        await update.message.reply_text(
+            "<b>Usage:</b> /points &lt;username&gt;\n<i>Example:</i> /points anshyt",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    name = ctx.args[0].lower().strip()
+    try:
+        from .config import Config
+        from .client import KickClient
+        config = Config.load()
+        client = KickClient(config.authorization)
+        points_data = client.get_channel_points(name)
+        if points_data:
+            # Show useful info even if balance not found
+            info_text = f"💰 <b>Points Info for {name}</b>\n"
+            info_text += f"Note: Channel points balance is not directly exposed via public API for all endpoints.\n\n"
+            info_text += f"<pre>{_esc(points_data)}</pre>"
+            await update.message.reply_text(info_text, parse_mode=ParseMode.HTML)
+        else:
+            await update.message.reply_text(
+                f"Could not fetch points for {name}. The endpoint might not be accessible.",
+                parse_mode=ParseMode.HTML
+            )
+    except Exception as e:
+        logger.error(f"Telegram cmd_points error: {e}")
+        await update.message.reply_text(f"Error: {e}", parse_mode=ParseMode.HTML)
+
+
+async def cmd_setpoints(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set channel points for a specific channel. Usage: /setpoints <username> <amount>"""
+    if len(ctx.args) < 2:
+        await update.message.reply_text(
+            "<b>Usage:</b> /setpoints &lt;username&gt; &lt;amount&gt;\n<i>Example:</i> /setpoints anshyt 10000",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    name = ctx.args[0].lower().strip()
+    try:
+        amount = int(ctx.args[1])
+    except ValueError:
+        await update.message.reply_text("Amount must be a number.", parse_mode=ParseMode.HTML)
+        return
+
+    try:
+        from .config import Config
+        from .client import KickClient
+        config = Config.load()
+        client = KickClient(config.authorization)
+        success = client.set_channel_points(name, amount)
+        if success:
+            await update.message.reply_text(
+                f"✅ Successfully set points for <b>{name}</b> to <code>{amount:,}</code>",
+                parse_mode=ParseMode.HTML
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Failed to set points for <b>{name}</b>. This may not be supported by Kick's API.",
+                parse_mode=ParseMode.HTML
+            )
+    except Exception as e:
+        logger.error(f"Telegram cmd_setpoints error: {e}")
+        await update.message.reply_text(f"Error: {e}", parse_mode=ParseMode.HTML)
+
+
+async def cmd_updatepoints(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Update channel points by delta. Usage: /updatepoints <username> <+/-amount>"""
+    if len(ctx.args) < 2:
+        await update.message.reply_text(
+            "<b>Usage:</b> /updatepoints &lt;username&gt; &lt;+/-delta&gt;\n<i>Example:</i> /updatepoints anshyt +500 or /updatepoints anshyt -100",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    name = ctx.args[0].lower().strip()
+    delta_str = ctx.args[1]
+    try:
+        amount_delta = int(delta_str) if delta_str.startswith('+') or delta_str.startswith('-') else int(delta_str)
+    except ValueError:
+        await update.message.reply_text("Delta must be a number (can start with + or -).", parse_mode=ParseMode.HTML)
+        return
+
+    try:
+        from .config import Config
+        from .client import KickClient
+        config = Config.load()
+        client = KickClient(config.authorization)
+        success = client.update_channel_points(name, amount_delta)
+        if success:
+            sign = "+" if amount_delta >= 0 else ""
+            await update.message.reply_text(
+                f"✅ Updated points for <b>{name}</b> by <code>{sign}{amount_delta:,}</code>",
+                parse_mode=ParseMode.HTML
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Failed to update points for <b>{name}</b>.",
+                parse_mode=ParseMode.HTML
+            )
+    except Exception as e:
+        logger.error(f"Telegram cmd_updatepoints error: {e}")
+        await update.message.reply_text(f"Error: {e}", parse_mode=ParseMode.HTML)
+
+
 
 async def cmd_wake(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     global _keepalive_active, _keepalive_thread
@@ -523,6 +635,9 @@ async def _post_init(application: Application) -> None:
         BotCommand("channel",  "Single channel details"),
         BotCommand("predictions", "7-day prediction stats"),
         BotCommand("pred",     "Channel prediction stats"),
+        BotCommand("points",   "Get channel points"),
+        BotCommand("setpoints", "Set channel points"),
+        BotCommand("updatepoints", "Update channel points"),
         BotCommand("ping",     "Quick health check"),
         BotCommand("wake",     "Start Render keep-alive"),
         BotCommand("sleep",    "Stop Render keep-alive"),
@@ -553,16 +668,19 @@ def start_bot(token: str, allowed_users: list[int] | None = None) -> None:
 
         # Register handlers
         for cmd, handler in [
-            ("start",       cmd_start),
-            ("help",        cmd_help),
-            ("ping",        cmd_ping),
-            ("status",      cmd_status),
-            ("channels",    cmd_channels),
-            ("channel",     cmd_channel),
-            ("predictions", cmd_predictions),
-            ("pred",        cmd_pred_channel),
-            ("wake",        cmd_wake),
-            ("sleep",       cmd_sleep),
+            ("start",         cmd_start),
+            ("help",          cmd_help),
+            ("ping",          cmd_ping),
+            ("status",        cmd_status),
+            ("channels",      cmd_channels),
+            ("channel",       cmd_channel),
+            ("predictions",   cmd_predictions),
+            ("pred",          cmd_pred_channel),
+            ("points",        cmd_points),
+            ("setpoints",     cmd_setpoints),
+            ("updatepoints",  cmd_updatepoints),
+            ("wake",          cmd_wake),
+            ("sleep",         cmd_sleep),
         ]:
             app.add_handler(CommandHandler(cmd, handler))
 

@@ -8,6 +8,7 @@ Automated bot for mining channel points and auto-participating in predictions on
 - **Smart Point Balance Fallback**: Automatically votes your configured points (e.g., 50 pts) and seamlessly falls back to Kick's platform minimum (10 pts) if channel points are insufficient.
 - **Multi-Channel Concurrent Monitoring**: Concurrently handles chat mining and prediction voting across all configured channels.
 - **Web Dashboard**: Modern dark-mode web interface (port `4000`) visualizing active channels, predictions, points voted, and live status.
+- **Points Management**: View, set, and update channel points via Telegram bot (`/points`, `/setpoints`, `/updatepoints`) and REST API endpoints.
 - **Docker & Cloud Ready**: Fully containerized and optimized for Oracle Cloud Free Tier (ARM64 Ampere / x86_64 AMD) with persistent volume logging and auto-restart.
 
 ---
