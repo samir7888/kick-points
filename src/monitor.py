@@ -57,6 +57,14 @@ class ChannelMonitor:
 
         web_server.register_channel(username)
 
+    @staticmethod
+    def _to_float(value, default: float = 1.0) -> float:
+        """Convert a possibly missing/None/str value to float."""
+        try:
+            return float(value) if value is not None else default
+        except (TypeError, ValueError):
+            return default
+
     # ------------------------------------------------------------------
     # Pusher initialisation
     # ------------------------------------------------------------------
@@ -186,7 +194,10 @@ class ChannelMonitor:
 
             outcomes = pred.get("outcomes") or []
             voted_outcome_id = str((user_vote or {}).get("outcome_id") or "")
-            voted_amount = int((user_vote or {}).get("total_vote_amount") or self.prediction_amount)
+            try:
+                voted_amount = int((user_vote or {}).get("total_vote_amount") or self.prediction_amount)
+            except (TypeError, ValueError):
+                voted_amount = self.prediction_amount
 
             winning_outcome_id = str(pred.get("winning_outcome_id") or pred.get("winningOutcomeId") or "")
             if not winning_outcome_id:
@@ -204,7 +215,7 @@ class ChannelMonitor:
                 "Unknown"
             )
             return_rate = next(
-                (float(o.get("return_rate", 1.0)) for o in outcomes if str(o.get("id")) == winning_outcome_id),
+                (self._to_float(o.get("return_rate")) for o in outcomes if str(o.get("id")) == winning_outcome_id),
                 1.0
             )
 
@@ -319,9 +330,11 @@ class ChannelMonitor:
             outcomes_with_odds = []
             for outcome in outcomes:
                 # Look for return_rate or odds data
-                return_rate = outcome.get("return_rate", 1.0)
-                odds = outcome.get("odds", 1.0)
-                multiplier = max(return_rate, odds)
+                # Values may be missing, None or strings -> never let this crash the vote
+                multiplier = max(
+                    self._to_float(outcome.get("return_rate")),
+                    self._to_float(outcome.get("odds")),
+                )
                 outcomes_with_odds.append({
                     "outcome": outcome,
                     "multiplier": multiplier,
@@ -367,9 +380,17 @@ class ChannelMonitor:
                 f"Voting {self.prediction_amount} pts on '{outcome_title}'"
             )
 
-            ok = self.client.vote_prediction(
-                self.username, prediction_id, outcome_id, self.prediction_amount
-            )
+            # Retry a few times: transient Cloudflare/5xx/429 errors are common and
+            # a single failure used to mean the prediction was never voted on.
+            ok = False
+            for attempt in range(1, 4):
+                ok = self.client.vote_prediction(
+                    self.username, prediction_id, outcome_id, self.prediction_amount
+                )
+                if ok or self.client.last_vote_terminal:
+                    break
+                logger.info(f"{self.username}: Vote attempt {attempt} failed, retrying...")
+                time.sleep(2 * attempt)
 
             if ok:
                 self.voted_prediction_ids.add(prediction_id)
@@ -418,6 +439,28 @@ class ChannelMonitor:
     # Main monitoring loop
     # ------------------------------------------------------------------
 
+    def _sleep_with_prediction_polling(self, wait_time: float, poll: bool, interval: int = 15) -> None:
+        """Sleep for wait_time, polling for new predictions every `interval` seconds.
+
+        Predictions often last only a minute or two, so waiting the full 3-5
+        minute chat interval (the old behaviour) missed votes whenever the
+        Pusher event was not delivered.
+        """
+        end = time.time() + wait_time
+        while True:
+            remaining = end - time.time()
+            if remaining <= 0:
+                return
+            time.sleep(min(interval, remaining))
+            if not poll:
+                continue
+            try:
+                active_pred = self.client.get_active_prediction(self.username)
+                if active_pred:
+                    self._handle_prediction(active_pred)
+            except Exception as e:
+                logger.debug(f"{self.username}: Prediction poll error: {e}")
+
     def run(self) -> None:
         """Run the monitoring loop."""
         # Check prediction resolution immediately at startup
@@ -460,7 +503,9 @@ class ChannelMonitor:
                         wait_time = self.wait_times["livestream_inactive"]
                         logger.info(f"{self.username} is offline. Waiting {wait_time}s.")
 
-                time.sleep(wait_time)
+                self._sleep_with_prediction_polling(
+                    wait_time, poll=(status == "online")
+                )
             except Exception as e:
                 logger.error(f"Error monitoring {self.username}: {e}")
                 web_server.update_channel(self.username, "error")

@@ -15,6 +15,8 @@ class KickClient:
     def __init__(self, authorization: str):
         self.authorization = authorization
         self.scraper = cloudscraper.create_scraper()
+        # True when the last vote failed for a reason retrying won't fix
+        self.last_vote_terminal = False
 
     def _headers(self) -> dict:
         return {"Authorization": self.authorization}
@@ -229,39 +231,77 @@ class KickClient:
 
     def vote_prediction(self, username: str, prediction_id: str,
                         outcome_id: str, amount: int = 50) -> bool:
-        """Vote channel points on a prediction outcome."""
-        try:
-            url = f"{self.BASE_URL}/channels/{username}/predictions/vote"
-            headers = self._headers()
-            headers.update({
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "Referer": f"https://kick.com/{username}",
-                "Origin": "https://kick.com",
-            })
+        """Vote channel points on a prediction outcome.
 
-            payload = {
-                "amount": amount,
-                "outcome_id": outcome_id,
-            }
-            response = self.scraper.post(url, json=payload, headers=headers, timeout=10)
-            if response.status_code == 200:
+        Tries the configured amount first, then steps down (half, then the
+        platform minimum of 10) if Kick rejects it, e.g. because the balance
+        or the channel's max bet is lower than configured. Sets
+        ``last_vote_terminal`` when retrying later is pointless.
+        """
+        self.last_vote_terminal = False
+        url = f"{self.BASE_URL}/channels/{username}/predictions/vote"
+        headers = self._headers()
+        headers.update({
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Referer": f"https://kick.com/{username}",
+            "Origin": "https://kick.com",
+        })
+
+        # Descending ladder of amounts to try, without duplicates
+        amounts = []
+        for a in (amount, amount // 2, 10):
+            if a >= 10 and a not in amounts:
+                amounts.append(a)
+        if not amounts:
+            amounts = [10]
+
+        for amt in amounts:
+            try:
+                response = self.scraper.post(
+                    url,
+                    json={"amount": amt, "outcome_id": outcome_id},
+                    headers=headers,
+                    timeout=10,
+                )
+            except Exception as e:
+                logger.error(f"Error voting prediction on {username}: {e}")
+                return False  # network error -> caller may retry
+
+            status = response.status_code
+            body = response.text[:200]
+
+            if status in (200, 201, 204):
+                if amt != amount:
+                    logger.info(f"{username}: Voted with fallback amount {amt} pts")
                 return True
 
-            # If 400 (e.g. insufficient points for configured amount), retry with platform min (10)
-            if amount > 10 and response.status_code == 400:
-                logger.info(
-                    f"{username}: Vote with {amount} pts failed (likely balance). Retrying with min (10 pts)..."
-                )
-                payload["amount"] = 10
-                retry_resp = self.scraper.post(url, json=payload, headers=headers, timeout=10)
-                if retry_resp.status_code == 200:
-                    return True
+            # Auth problems: retrying won't help
+            if status == 401:
+                logger.error(f"{username}: Vote rejected (401). Authorization token expired/invalid.")
+                self.last_vote_terminal = True
+                return False
 
-            logger.warning(
-                f"Vote on {username} failed: HTTP {response.status_code} - {response.text[:200]}"
-            )
+            lowered = body.lower()
+            if "already" in lowered and ("vote" in lowered or "voted" in lowered):
+                logger.info(f"{username}: Already voted on this prediction.")
+                return True
+            if any(w in lowered for w in ("locked", "ended", "closed", "resolved", "not active")):
+                logger.warning(f"{username}: Prediction no longer open: {body}")
+                self.last_vote_terminal = True
+                return False
+
+            # 400/422: amount problem (balance, min/max bet) -> try smaller amount
+            if status in (400, 422):
+                logger.info(
+                    f"{username}: Vote with {amt} pts rejected (HTTP {status}: {body}). Trying a lower amount..."
+                )
+                continue
+
+            # 403 (Cloudflare), 429, 5xx etc: transient, let the caller retry
+            logger.warning(f"Vote on {username} failed: HTTP {status} - {body}")
             return False
-        except Exception as e:
-            logger.error(f"Error voting prediction on {username}: {e}")
-            return False
+
+        logger.warning(f"Vote on {username} failed for all amounts {amounts}")
+        self.last_vote_terminal = True
+        return False
